@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Divided Shooter - Game Edukasi Pembagian AR</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts: Fredoka & Nunito -->
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Nunito:wght@600;800;900&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            font-family: 'Nunito', sans-serif;
+            background-color: #0c0f1d;
+            color: #ffffff;
+            overflow: hidden;
+            user-select: none;
+        }
+        .font-game {
+            font-family: 'Fredoka', cursive, sans-serif;
+        }
+        
+        /* Mirror video preview for natural interaction */
+        #webcam {
+            transform: scaleX(-1);
+        }
+        
+        /* Custom Glowing & Game UI Styles */
+        .glow-title {
+            text-shadow: 0 0 15px rgba(59, 130, 246, 0.8), 0 0 30px rgba(147, 51, 234, 0.6);
+        }
+        
+        .glow-box {
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
+        }
+
+        .btn-bounce {
+            transition: transform 0.1s ease, box-shadow 0.2s ease;
+        }
+        .btn-bounce:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 25px -5px rgba(59, 130, 246, 0.5);
+        }
+        .btn-bounce:active {
+            transform: scale(0.95);
+        }
+
+        /* Pulsing Laser Reticle animation */
+        @keyframes pulse-reticle {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 0.8; }
+            50% { transform: translate(-50%, -50%) scale(1.15); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 0.8; }
+        }
+
+        .reticle-anim {
+            animation: pulse-reticle 1.5s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col items-center justify-center relative overflow-hidden bg-slate-950">
+
+    <!-- CANVAS UTAMA GAME (3D Stars, Asteroids, Laser, Particles) -->
+    <canvas id="gameCanvas" class="absolute inset-0 w-full h-full z-0"></canvas>
+
+    <!-- HIDDEN VIDEO ELEMENT FOR WEBCAM -->
+    <video id="webcam" class="hidden" playsinline></video>
+
+    <!-- MINI WEBCAM PREVIEW (POJOK KANAN BAWAH) -->
+    <div id="cameraPreviewContainer" class="hidden absolute bottom-4 right-4 w-44 h-32 md:w-56 md:h-40 rounded-2xl border-4 border-cyan-400 overflow-hidden bg-slate-900 shadow-2xl z-30 transition-all">
+        <canvas id="cameraCanvas" class="w-full h-full object-cover transform -scale-x-100"></canvas>
+        <div class="absolute top-2 left-2 bg-black/60 px-2 py-0.5 rounded-full text-xs font-bold text-cyan-300 flex items-center gap-1">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            AR Tangan
+        </div>
+        <div id="pinchIndicator" class="absolute bottom-2 left-2 bg-amber-500/90 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full hidden">
+            <i class="fa-solid fa-hand-fist"></i> TEMBAK!
+        </div>
+    </div>
+
+    <!-- RETIKEL / POINTER KONTROL HAND GESTURE -->
+    <div id="handReticle" class="hidden fixed pointer-events-none z-50 transform -translate-x-1/2 -translate-y-1/2 transition-transform duration-75">
+        <!-- Circular Reticle -->
+        <div class="relative w-16 h-16 flex items-center justify-center">
+            <div class="absolute inset-0 border-2 border-dashed border-cyan-400 rounded-full animate-spin" style="animation-duration: 8s;"></div>
+            <div class="w-10 h-10 border-2 border-pink-500 rounded-full reticle-anim flex items-center justify-center bg-cyan-500/20">
+                <div class="w-2 h-2 bg-yellow-300 rounded-full"></div>
+            </div>
+            <!-- Dwell Progress SVG Circle -->
+            <svg class="absolute inset-0 w-full h-full -rotate-90 pointer-events-none">
+                <circle cx="32" cy="32" r="28" stroke="rgba(255, 255, 255, 0.2)" stroke-width="4" fill="none" />
+                <circle id="dwellCircle" cx="32" cy="32" r="28" stroke="#facc15" stroke-width="5" fill="none"
+                        stroke-dasharray="175" stroke-dashoffset="175" stroke-linecap="round" />
+            </svg>
+        </div>
+    </div>
+
+    <!-- HUD / OVERLAY SAAT BERMAIN -->
+    <div id="gameHUD" class="hidden absolute top-0 left-0 w-full p-4 md:p-6 z-20 flex flex-col pointer-events-none">
+        <!-- Bar Status Atas -->
+        <div class="flex justify-between items-center bg-slate-900/80 backdrop-blur-md px-6 py-3 rounded-2xl border border-cyan-500/30 max-w-5xl mx-auto w-full shadow-lg">
+            <!-- Nyawa / Health -->
+            <div class="flex items-center gap-2">
+                <span class="text-xs md:text-sm font-bold text-slate-400 uppercase tracking-wider">Nyawa:</span>
+                <div id="livesContainer" class="flex gap-1 text-xl md:text-2xl text-red-500">
+                    <i class="fa-solid fa-heart"></i>
+                    <i class="fa-solid fa-heart"></i>
+                    <i class="fa-solid fa-heart"></i>
+                </div>
+            </div>
+
+            <!-- Progres Soal -->
+            <div class="text-center">
+                <span class="text-xs text-cyan-300 font-bold tracking-widest uppercase block">Misi Soal</span>
+                <span id="questionProgress" class="font-game text-xl md:text-2xl text-yellow-300">1 / 15</span>
+            </div>
+
+            <!-- Skor & Koin -->
+            <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-coins text-amber-400 text-xl"></i>
+                    <span id="scoreText" class="font-game text-xl md:text-2xl text-cyan-400">0</span>
+                </div>
+                <!-- Mute Audio Button (pointer-events-auto) -->
+                <button id="btnAudioToggle" class="pointer-events-auto bg-slate-800 hover:bg-slate-700 text-yellow-400 w-10 h-10 rounded-xl flex items-center justify-center border border-slate-600">
+                    <i id="audioIcon" class="fa-solid fa-volume-high"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- AREA SOAL PEMBAGIAN -->
+        <div class="mt-4 mx-auto text-center pointer-events-auto">
+            <div class="inline-block bg-gradient-to-r from-indigo-900/90 via-purple-900/90 to-slate-900/90 backdrop-blur-md border-2 border-cyan-400/60 px-8 py-3 md:py-4 rounded-3xl shadow-2xl">
+                <p class="text-xs md:text-sm text-cyan-200 uppercase font-semibold tracking-wider mb-1">Tembak Jawaban yang Benar!</p>
+                <h2 id="questionText" class="font-game text-3xl md:text-5xl text-white tracking-wide drop-shadow-md">
+                    24 : 4 = ?
+                </h2>
+            </div>
+        </div>
+    </div>
+
+    <!-- FEEDBACK NOTIFICATION OVERLAY (BENAR / SALAH) -->
+    <div id="feedbackBanner" class="hidden absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-40 text-center pointer-events-none transition-all duration-300 scale-50 opacity-0">
+        <div id="feedbackBox" class="px-8 py-6 rounded-3xl border-4 backdrop-blur-xl shadow-2xl flex flex-col items-center justify-center gap-2">
+            <i id="feedbackIcon" class="text-6xl"></i>
+            <h3 id="feedbackTitle" class="font-game text-4xl md:text-5xl">HEBAT!</h3>
+            <p id="feedbackSubtitle" class="text-lg md:text-xl font-bold text-slate-200"></p>
+        </div>
+    </div>
+
+    <!-- SCREEN 1: HALAMAN UTAMA / START SCREEN -->
+    <div id="screenStart" class="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 bg-slate-950/80 backdrop-blur-md">
+        <div class="max-w-2xl w-full text-center flex flex-col items-center gap-6">
+            <!-- Title -->
+            <div class="space-y-2">
+                <div class="inline-block bg-cyan-500/10 border border-cyan-400/30 px-4 py-1.5 rounded-full text-cyan-300 text-xs md:text-sm font-bold tracking-widest uppercase">
+                    🚀 Game Edukasi Matematika Kelas IV SD
+                </div>
+                <h1 class="font-game text-5xl md:text-7xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-yellow-300 to-pink-500 glow-title">
+                    DIVIDED SHOOTER
+                </h1>
+                <p class="text-slate-300 text-base md:text-lg max-w-lg mx-auto">
+                    Jadilah Kapten Antariksa! Kendalikan meriam laser dengan <span class="text-yellow-300 font-bold">gerakan tanganmu</span> dan hancurkan target pembagian yang tepat!
+                </p>
+            </div>
+
+            <!-- Petunjuk Ringkas -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 w-full text-left bg-slate-900/80 border border-slate-800 p-4 md:p-5 rounded-2xl">
+                <div class="flex items-start gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xl shrink-0">
+                        <i class="fa-solid fa-hand-pointer"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-bold text-sm text-cyan-300">1. Arahkan Telunjuk</h4>
+                        <p class="text-xs text-slate-400">Gunakan ujung jari telunjuk untuk mengarahkan sasaran ke target.</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-pink-500/20 text-pink-400 flex items-center justify-center text-xl shrink-0">
+                        <i class="fa-solid fa-hand-back-fist"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-bold text-sm text-pink-300">2. Cara Tembak</h4>
+                        <p class="text-xs text-slate-400"><span class="text-yellow-300">Cubit</span> telunjuk-jempol ATAU <span class="text-yellow-300">tahan sasaran</span> di atas target selama 1 detik.</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-yellow-500/20 text-yellow-400 flex items-center justify-center text-xl shrink-0">
+                        <i class="fa-solid fa-bullseye"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-bold text-sm text-yellow-300">3. Pilih Jawaban</h4>
+                        <p class="text-xs text-slate-400">Tembak angka hasil pembagian yang benar sebelum melayang pergi!</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tombol Aktifkan Kamera & Main -->
+            <div class="flex flex-col sm:flex-row gap-4 w-full justify-center items-center mt-2">
+                <button id="btnStartGame" class="btn-bounce w-full sm:w-auto px-8 py-4 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-game text-2xl rounded-2xl shadow-xl flex items-center justify-center gap-3 cursor-pointer">
+                    <i class="fa-solid fa-rocket"></i> MULAI PERMAINAN
+                </button>
+            </div>
+
+            <!-- Status Pesan Kamera -->
+            <div id="cameraStatus" class="text-xs text-slate-400 flex items-center gap-2">
+                <i class="fa-solid fa-camera text-cyan-400"></i> Kamera webcam akan diaktifkan saat memulai game.
+            </div>
+        </div>
+    </div>
+
+    <!-- ERROR WEBCAM MODAL -->
+    <div id="modalCameraError" class="hidden absolute inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/90 backdrop-blur-lg">
+        <div class="bg-slate-900 border-2 border-red-500/60 p-6 md:p-8 rounded-3xl max-w-md w-full text-center space-y-4 shadow-2xl">
+            <div class="w-16 h-16 bg-red-500/20 text-red-400 rounded-full flex items-center justify-center text-3xl mx-auto">
+                <i class="fa-solid fa-video-slash"></i>
+            </div>
+            <h3 class="font-game text-2xl text-red-400">Akses Kamera Diperlukan</h3>
+            <p class="text-sm text-slate-300">
+                Game "Divided Shooter" memerlukan akses webcam untuk mendeteksi kontrol gerakan tangan. Pastikan izin kamera sudah diberikan pada browser Anda.
+            </p>
+            <div class="bg-slate-800 p-3 rounded-xl text-xs text-left text-slate-400 space-y-1">
+                <p class="font-bold text-slate-200">Tips Mengatasi:</p>
+                <p>1. Klik ikon gembok/kamera di sebelah kiri URL browser.</p>
+                <p>2. Izinkan (Allow) akses kamera.</p>
+                <p>3. Muat ulang (Refresh) halaman web.</p>
+            </div>
+            <button id="btnRetryCamera" class="w-full py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-xl transition">
+                Coba Lagi
+            </button>
+        </div>
+    </div>
+
+    <!-- SCREEN 2: GAME OVER / RESULT SCREEN -->
+    <div id="screenResult" class="hidden absolute inset-0 z-30 flex flex-col items-center justify-center p-6 bg-slate-950/90 backdrop-blur-lg">
+        <div class="max-w-xl w-full bg-slate-900/90 border-2 border-cyan-500/50 p-6 md:p-8 rounded-3xl text-center space-y-6 shadow-2xl relative overflow-hidden">
+            <!-- Background Glow Decor -->
+            <div class="absolute -top-10 -left-10 w-40 h-40 bg-cyan-500/20 rounded-full blur-3xl pointer-events-none"></div>
+            <div class="absolute -bottom-10 -right-10 w-40 h-40 bg-purple-500/20 rounded-full blur-3xl pointer-events-none"></div>
+
+            <h2 id="resultTitle" class="font-game text-4xl md:text-5xl text-yellow-300 tracking-wide">
+                MISI SELESAI! 🎉
+            </h2>
+
+            <!-- Bintang Penghargaan -->
+            <div id="starsContainer" class="flex justify-center gap-3 text-4xl md:text-5xl text-amber-400">
+                <i class="fa-solid fa-star"></i>
+                <i class="fa-solid fa-star"></i>
+                <i class="fa-solid fa-star"></i>
+            </div>
+
+            <!-- Rincian Skor & Statistik -->
+            <div class="grid grid-cols-3 gap-3 bg-slate-800/80 p-4 rounded-2xl border border-slate-700">
+                <div class="flex flex-col items-center">
+                    <span class="text-xs text-slate-400 font-semibold uppercase">Skor Akhir</span>
+                    <span id="finalScore" class="font-game text-2xl md:text-3xl text-cyan-400">0</span>
+                </div>
+                <div class="flex flex-col items-center border-x border-slate-700">
+                    <span class="text-xs text-slate-400 font-semibold uppercase">Jawaban Benar</span>
+                    <span id="finalCorrect" class="font-game text-2xl md:text-3xl text-emerald-400">0</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span class="text-xs text-slate-400 font-semibold uppercase">Jawaban Salah</span>
+                    <span id="finalWrong" class="font-game text-2xl md:text-3xl text-rose-400">0</span>
+                </div>
+            </div>
+
+            <!-- Pesan Motivasi Edukatif -->
+            <p id="motivationText" class="text-slate-200 text-base md:text-lg font-semibold italic bg-cyan-950/40 p-4 rounded-xl border border-cyan-500/30">
+                "Hebat sekali! Kamu makin mahir dalam pembagian matematika. Tingkatkan terus prestasimu!"
+            </p>
+
+            <!-- Tombol Ulang / Keluar -->
+            <div class="flex flex-col sm:flex-row gap-4 pt-2">
+                <button id="btnRestartGame" class="btn-bounce flex-1 py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-game text-xl rounded-2xl shadow-lg">
+                    <i class="fa-solid fa-rotate-right mr-2"></i> MAIN LAGI
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        /* ==========================================================================
+           1. DATA SOAL PEMBAGIAN KELAS IV SD (15 SOAL)
+           ========================================================================== */
+        const QUESTION_BANK = [
+            { num1: 12, num2: 3, answer: 4, options: [3, 4, 6] },
+            { num1: 20, num2: 4, answer: 5, options: [4, 5, 8] },
+            { num1: 18, num2: 2, answer: 9, options: [9, 7, 8] },
+            { num1: 35, num2: 5, answer: 7, options: [6, 7, 5] },
+            { num1: 24, num2: 6, answer: 4, options: [3, 4, 6] },
+            { num1: 36, num2: 4, answer: 9, options: [8, 9, 7] },
+            { num1: 42, num2: 7, answer: 6, options: [6, 8, 5] },
+            { num1: 48, num2: 8, answer: 6, options: [7, 6, 9] },
+            { num1: 54, num2: 9, answer: 6, options: [6, 5, 8] },
+            { num1: 63, num2: 7, answer: 9, options: [8, 9, 7] },
+            { num1: 64, num2: 8, answer: 8, options: [8, 7, 9] },
+            { num1: 72, num2: 9, answer: 8, options: [6, 8, 9] },
+            { num1: 81, num2: 9, answer: 9, options: [9, 8, 7] },
+            { num1: 56, num2: 8, answer: 7, options: [6, 7, 8] },
+            { num1: 90, num2: 10, answer: 9, options: [9, 10, 8] }
+        ];
+
+        /* ==========================================================================
+           2. GAME STATE & VARIABLES
+           ========================================================================== */
+        let gameState = 'START'; // 'START', 'PLAYING', 'GAMEOVER'
+        let currentQuestionIdx = 0;
+        let score = 0;
+        let lives = 3;
+        let correctCount = 0;
+        let wrongCount = 0;
+        
+        let audioEnabled = true;
+        let audioCtx = null;
+
+        // Target Asteroid objek melayang
+        let targets = [];
+        let lasers = [];
+        let particleEffects = [];
+        let stars = [];
+
+        // Hand Gesture Tracking State
+        let handX = 0, handY = 0; // Normalized Screen Coordinates (0 to 1)
+        let isHandDetected = false;
+        let isPinching = false;
+        let wasPinching = false;
+
+        // Dwell hover selection timer (menahan sasaran)
+        let hoveredTarget = null;
+        let hoverStartTime = 0;
+        const DWELL_DURATION = 1200; // 1.2 detik hover untuk konfirmasi otomatis
+
+        /* ==========================================================================
+           3. CANVAS & RESIZE SETUP
+           ========================================================================== */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const cameraCanvas = document.getElementById('cameraCanvas');
+        const cameraCtx = cameraCanvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            initBackgroundStars();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function initBackgroundStars() {
+            stars = [];
+            const count = Math.floor((canvas.width * canvas.height) / 3000);
+            for (let i = 0; i < count; i++) {
+                stars.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    radius: Math.random() * 1.8 + 0.5,
+                    alpha: Math.random() * 0.8 + 0.2,
+                    speed: Math.random() * 0.5 + 0.1
+                });
+            }
+        }
+
+        /* ==========================================================================
+           4. SOUND SYSTEM (WEB AUDIO API SYNTHESIZER)
+           ========================================================================== */
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioEnabled || !audioCtx) return;
+
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'laser') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(800, now);
+                osc.frequency.exponentialRampToValueAtTime(100, now + 0.15);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+                osc.start(now);
+                osc.stop(now + 0.15);
+            } else if (type === 'correct') {
+                // Chord C-E-G gembira
+                [523.25, 659.25, 783.99, 1046.50].forEach((freq, idx) => {
+                    const noteOsc = audioCtx.createOscillator();
+                    const noteGain = audioCtx.createGain();
+                    noteOsc.type = 'sine';
+                    noteOsc.frequency.setValueAtTime(freq, now + idx * 0.08);
+                    noteGain.gain.setValueAtTime(0.25, now + idx * 0.08);
+                    noteGain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.3);
+                    noteOsc.connect(noteGain);
+                    noteGain.connect(audioCtx.destination);
+                    noteOsc.start(now + idx * 0.08);
+                    noteOsc.stop(now + idx * 0.08 + 0.3);
+                });
+            } else if (type === 'wrong') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(220, now);
+                osc.frequency.setValueAtTime(160, now + 0.15);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.35);
+                osc.start(now);
+                osc.stop(now + 0.35);
+            } else if (type === 'explode') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(150, now);
+                osc.frequency.exponentialRampToValueAtTime(30, now + 0.25);
+                gain.gain.setValueAtTime(0.4, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.25);
+                osc.start(now);
+                osc.stop(now + 0.25);
+            }
+        }
+
+        /* ==========================================================================
+           5. MEDIAPIPE HAND LANDMARKER INTEGRATION
+           ========================================================================== */
+        const videoElement = document.getElementById('webcam');
+        let camera = null;
+
+        function setupMediaPipe() {
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onHandResults);
+
+            camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({ image: videoElement });
+                },
+                width: 640,
+                height: 480
+            });
+        }
+
+        function onHandResults(results) {
+            // Render webcam canvas preview
+            cameraCtx.save();
+            cameraCtx.clearRect(0, 0, cameraCanvas.width, cameraCanvas.height);
+            cameraCtx.drawImage(results.image, 0, 0, cameraCanvas.width, cameraCanvas.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                isHandDetected = true;
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Gambar skeleton tangan di webcam preview
+                drawConnectors(cameraCtx, landmarks, HAND_CONNECTIONS, { color: '#00FFC8', lineWidth: 2 });
+                drawLandmarks(cameraCtx, landmarks, { color: '#FF007A', lineWidth: 1, radius: 3 });
+
+                // Ambil koordinat Ujung Jari Telunjuk (Landmark 8)
+                const indexTip = landmarks[8];
+                // Mirroring X karena kamera di-mirror secara visual
+                const targetX = (1 - indexTip.x) * window.innerWidth;
+                const targetY = indexTip.y * window.innerHeight;
+
+                // Smooth reticle movement (Lerp)
+                handX += (targetX - handX) * 0.4;
+                handY += (targetY - handY) * 0.4;
+
+                // Hitung Deteksi "Pinch" (Cubit: Jarak Ujung Telunjuk #8 dan Jempol #4)
+                const thumbTip = landmarks[4];
+                const dx = indexTip.x - thumbTip.x;
+                const dy = indexTip.y - thumbTip.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                // Jika jarak telunjuk-jempol sangat dekat (< 0.06), maka terdeteksi PINCH/Tembak
+                isPinching = distance < 0.065;
+
+                // Update posisi reticle UI
+                const reticle = document.getElementById('handReticle');
+                reticle.style.left = `${handX}px`;
+                reticle.style.top = `${handY}px`;
+                reticle.classList.remove('hidden');
+
+                // Tembak jika baru saja mencubit (Trigger once per pinch)
+                if (isPinching && !wasPinching && gameState === 'PLAYING') {
+                    triggerShoot(handX, handY);
+                }
+                wasPinching = isPinching;
+
+                // Indikator Pinch di Kamera Preview
+                document.getElementById('pinchIndicator').classList.toggle('hidden', !isPinching);
+
+            } else {
+                isHandDetected = false;
+                document.getElementById('handReticle').classList.add('hidden');
+                document.getElementById('pinchIndicator').classList.add('hidden');
+            }
+            cameraCtx.restore();
+        }
+
+        /* Fallback Mouse Control jika anak menggunakan laptop tanpa kamera/mouse */
+        window.addEventListener('mousemove', (e) => {
+            if (!isHandDetected) {
+                handX = e.clientX;
+                handY = e.clientY;
+                const reticle = document.getElementById('handReticle');
+                reticle.style.left = `${handX}px`;
+                reticle.style.top = `${handY}px`;
+                reticle.classList.remove('hidden');
+            }
+        });
+
+        window.addEventListener('mousedown', (e) => {
+            if (!isHandDetected && gameState === 'PLAYING') {
+                triggerShoot(e.clientX, e.clientY);
+            }
+        });
+
+        /* ==========================================================================
+           6. LOGIKA PERMAINAN & SOAL
+           ========================================================================== */
+        function startNewGame() {
+            initAudio();
+            gameState = 'PLAYING';
+            score = 0;
+            lives = 3;
+            correctCount = 0;
+            wrongCount = 0;
+            currentQuestionIdx = 0;
+
+            document.getElementById('screenStart').classList.add('hidden');
+            document.getElementById('screenResult').classList.add('hidden');
+            document.getElementById('gameHUD').classList.remove('hidden');
+            document.getElementById('cameraPreviewContainer').classList.remove('hidden');
+
+            updateHUD();
+            loadQuestion(currentQuestionIdx);
+        }
+
+        function updateHUD() {
+            document.getElementById('scoreText').innerText = score;
+            document.getElementById('questionProgress').innerText = `${currentQuestionIdx + 1} / ${QUESTION_BANK.length}`;
+
+            // Render Nyawa Heart Icons
+            const heartsContainer = document.getElementById('livesContainer');
+            heartsContainer.innerHTML = '';
+            for (let i = 0; i < 3; i++) {
+                const heart = document.createElement('i');
+                if (i < lives) {
+                    heart.className = 'fa-solid fa-heart text-red-500';
+                } else {
+                    heart.className = 'fa-regular fa-heart text-slate-600';
+                }
+                heartsContainer.appendChild(heart);
+            }
+        }
+
+        function loadQuestion(idx) {
+            if (idx >= QUESTION_BANK.length || lives <= 0) {
+                endGame();
+                return;
+            }
+
+            const q = QUESTION_BANK[idx];
+            document.getElementById('questionText').innerText = `${q.num1} : ${q.num2} = ?`;
+
+            // Buat Target Asteroid untuk Pilihan Jawaban
+            targets = [];
+            const shuffledOptions = [...q.options].sort(() => Math.random() - 0.5);
+
+            const startY = canvas.height * 0.45;
+            const screenWidth = canvas.width;
+            const spacing = screenWidth / (shuffledOptions.length + 1);
+
+            shuffledOptions.forEach((val, index) => {
+                const x = spacing * (index + 1);
+                targets.push({
+                    value: val,
+                    isCorrect: val === q.answer,
+                    x: x,
+                    y: startY + (Math.random() * 60 - 30),
+                    radius: Math.min(canvas.width, canvas.height) * 0.08 + 20, // Responsive size
+                    vx: (Math.random() - 0.5) * 1.5,
+                    vy: (Math.random() - 0.5) * 1.2,
+                    color: ['#06b6d4', '#ec4899', '#a855f7', '#f59e0b'][index % 4],
+                    rotation: 0,
+                    vRot: (Math.random() - 0.5) * 0.02
+                });
+            });
+
+            updateHUD();
+        }
+
+        function triggerShoot(x, y) {
+            playSound('laser');
+
+            // Tambahkan Efek Visual Laser dari bagian bawah layar menuju target
+            lasers.push({
+                startX: canvas.width / 2,
+                startY: canvas.height,
+                targetX: x,
+                targetY: y,
+                currentX: canvas.width / 2,
+                currentY: canvas.height,
+                progress: 0,
+                color: '#38bdf8'
+            });
+
+            // Cek Tabrakan Sasaran Tembak dengan Asteroid Jawaban
+            let hitTargetIdx = -1;
+            for (let i = 0; i < targets.length; i++) {
+                const t = targets[i];
+                const dist = Math.hypot(x - t.x, y - t.y);
+                if (dist <= t.radius) {
+                    hitTargetIdx = i;
+                    break;
+                }
+            }
+
+            if (hitTargetIdx !== -1) {
+                const hit = targets[hitTargetIdx];
+                createExplosion(hit.x, hit.y, hit.color);
+
+                if (hit.isCorrect) {
+                    // Jawaban BENAR!
+                    playSound('correct');
+                    score += 100;
+                    correctCount++;
+                    showFeedback(true, "HEBAT! JAWABAN BENAR 👏", "+100 Poin");
+                } else {
+                    // Jawaban SALAH
+                    playSound('wrong');
+                    lives--;
+                    wrongCount++;
+                    showFeedback(false, "KURANG TEPAT! 😅", "Tetap Semangat!");
+                }
+
+                targets = []; // Hapus target setelah ditembak
+
+                setTimeout(() => {
+                    currentQuestionIdx++;
+                    loadQuestion(currentQuestionIdx);
+                }, 1400);
+            }
+        }
+
+        /* Umpan Balik Visual Pop-up */
+        function showFeedback(isCorrect, title, subtitle) {
+            const banner = document.getElementById('feedbackBanner');
+            const box = document.getElementById('feedbackBox');
+            const icon = document.getElementById('feedbackIcon');
+            const titleEl = document.getElementById('feedbackTitle');
+            const subEl = document.getElementById('feedbackSubtitle');
+
+            titleEl.innerText = title;
+            subEl.innerText = subtitle;
+
+            if (isCorrect) {
+                box.className = "px-8 py-6 rounded-3xl border-4 border-emerald-400 bg-emerald-950/90 text-emerald-300 shadow-2xl flex flex-col items-center gap-2";
+                icon.className = "fa-solid fa-circle-check text-6xl text-emerald-400 animate-bounce";
+            } else {
+                box.className = "px-8 py-6 rounded-3xl border-4 border-rose-500 bg-rose-950/90 text-rose-200 shadow-2xl flex flex-col items-center gap-2";
+                icon.className = "fa-solid fa-circle-xmark text-6xl text-rose-400 animate-bounce";
+            }
+
+            banner.classList.remove('hidden');
+            setTimeout(() => {
+                banner.classList.remove('scale-50', 'opacity-0');
+                banner.classList.add('scale-100', 'opacity-100');
+            }, 10);
+
+            setTimeout(() => {
+                banner.classList.remove('scale-100', 'opacity-100');
+                banner.classList.add('scale-50', 'opacity-0');
+                setTimeout(() => {
+                    banner.classList.add('hidden');
+                }, 300);
+            }, 1100);
+        }
+
+        /* ==========================================================================
+           7. EFEK PARTIKEL LEDAKAN
+           ========================================================================== */
+        function createExplosion(x, y, color) {
+            playSound('explode');
+            for (let i = 0; i < 25; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 6 + 2;
+                particleEffects.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    radius: Math.random() * 5 + 3,
+                    color: color,
+                    alpha: 1,
+                    decay: Math.random() * 0.03 + 0.015
+                });
+            }
+        }
+
+        /* ==========================================================================
+           8. MAIN GAME LOOP & RENDERER
+           ========================================================================== */
+        function updateAndRender() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // A. Render Bintang Latar Belakang
+            stars.forEach(star => {
+                star.y += star.speed;
+                if (star.y > canvas.height) star.y = 0;
+                ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            if (gameState === 'PLAYING') {
+                // B. Render Laser Trajectory
+                for (let i = lasers.length - 1; i >= 0; i--) {
+                    const l = lasers[i];
+                    l.progress += 0.15;
+
+                    l.currentX = l.startX + (l.targetX - l.startX) * l.progress;
+                    l.currentY = l.startY + (l.targetY - l.startY) * l.progress;
+
+                    ctx.strokeStyle = l.color;
+                    ctx.lineWidth = 6;
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = l.color;
+                    ctx.beginPath();
+                    ctx.moveTo(l.startX, l.startY);
+                    ctx.lineTo(l.currentX, l.currentY);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+
+                    if (l.progress >= 1) {
+                        lasers.splice(i, 1);
+                    }
+                }
+
+                // C. Render Target Asteroid Jawaban
+                let currentHovered = null;
+
+                targets.forEach(t => {
+                    // Update posisi asteroid (bounce di pinggir layar)
+                    t.x += t.vx;
+                    t.y += t.vy;
+                    t.rotation += t.vRot;
+
+                    if (t.x - t.radius < 50 || t.x + t.radius > canvas.width - 50) t.vx *= -1;
+                    if (t.y - t.radius < 120 || t.y + t.radius > canvas.height - 100) t.vy *= -1;
+
+                    // Cek jika reticle melayang di atas target (Hover Dwell)
+                    const distToReticle = Math.hypot(handX - t.x, handY - t.y);
+                    if (distToReticle <= t.radius) {
+                        currentHovered = t;
+                    }
+
+                    // Draw Asteroid Body (Glow Outer)
+                    ctx.save();
+                    ctx.translate(t.x, t.y);
+                    ctx.rotate(t.rotation);
+
+                    ctx.shadowBlur = 20;
+                    ctx.shadowColor = t.color;
+
+                    ctx.fillStyle = '#1e293b';
+                    ctx.strokeStyle = t.color;
+                    ctx.lineWidth = 4;
+
+                    ctx.beginPath();
+                    ctx.arc(0, 0, t.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Teks Angka Jawaban
+                    ctx.restore();
+                    ctx.shadowBlur = 0;
+                    ctx.font = `700 ${t.radius * 0.9}px 'Fredoka', cursive, sans-serif`;
+                    ctx.fillStyle = '#ffffff';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(t.value, t.x, t.y);
+                });
+
+                // D. Logika Dwell Hovering (Menahan Sasaran)
+                const dwellCircle = document.getElementById('dwellCircle');
+                if (currentHovered) {
+                    if (hoveredTarget !== currentHovered) {
+                        hoveredTarget = currentHovered;
+                        hoverStartTime = Date.now();
+                    } else {
+                        const elapsed = Date.now() - hoverStartTime;
+                        const progress = Math.min(elapsed / DWELL_DURATION, 1);
+                        // Update progress ring stroke-dashoffset (Max = 175)
+                        dwellCircle.style.strokeDashoffset = 175 - (175 * progress);
+
+                        if (elapsed >= DWELL_DURATION) {
+                            // Trigger tembak otomatis jika tahan 1.2 detik
+                            triggerShoot(handX, handY);
+                            hoveredTarget = null;
+                            dwellCircle.style.strokeDashoffset = 175;
+                        }
+                    }
+                } else {
+                    hoveredTarget = null;
+                    dwellCircle.style.strokeDashoffset = 175;
+                }
+
+                // E. Render Partikel Ledakan
+                for (let i = particleEffects.length - 1; i >= 0; i--) {
+                    const p = particleEffects[i];
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.alpha -= p.decay;
+
+                    if (p.alpha <= 0) {
+                        particleEffects.splice(i, 1);
+                    } else {
+                        ctx.fillStyle = p.color;
+                        ctx.globalAlpha = p.alpha;
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.globalAlpha = 1;
+                    }
+                }
+            }
+
+            requestAnimationFrame(updateAndRender);
+        }
+
+        /* ==========================================================================
+           9. AKHIR PERMAINAN & STATISTIK
+           ========================================================================== */
+        function endGame() {
+            gameState = 'GAMEOVER';
+
+            document.getElementById('gameHUD').classList.add('hidden');
+            document.getElementById('handReticle').classList.add('hidden');
+            document.getElementById('screenResult').classList.remove('hidden');
+
+            document.getElementById('finalScore').innerText = score;
+            document.getElementById('finalCorrect').innerText = correctCount;
+            document.getElementById('finalWrong').innerText = wrongCount;
+
+            // Hitung Jumlah Bintang
+            const starsContainer = document.getElementById('starsContainer');
+            starsContainer.innerHTML = '';
+            let starNum = 1;
+            if (correctCount >= 12) starNum = 3;
+            else if (correctCount >= 7) starNum = 2;
+
+            for (let i = 0; i < 3; i++) {
+                const starIcon = document.createElement('i');
+                if (i < starNum) {
+                    starIcon.className = 'fa-solid fa-star text-amber-400 drop-shadow-md animate-bounce';
+                } else {
+                    starIcon.className = 'fa-regular fa-star text-slate-600';
+                }
+                starsContainer.appendChild(starIcon);
+            }
+
+            // Pesan Motivasi Edukatif
+            const motivationText = document.getElementById('motivationText');
+            if (starNum === 3) {
+                motivationText.innerText = "🏆 Luar Biasa! Kamu adalah Bintang Matematika Sejati! Semua pembagian kamu selesaikan dengan sangat tepat!";
+            } else if (starNum === 2) {
+                motivationText.innerText = "⭐ Kerja Bagus! Kemampuan pembagianmu sudah sangat baik. Latihan sedikit lagi untuk meraih 3 bintang sempurna!";
+            } else {
+                motivationText.innerText = "💪 Jangan Menyerah! Matematika itu menyenangkan. Ayo coba lagi dan kalahkan skor terbaikmu!";
+            }
+        }
+
+        /* ==========================================================================
+           10. EVENT LISTENERS & INITIALIZATION
+           ========================================================================== */
+        document.getElementById('btnStartGame').addEventListener('click', async () => {
+            initAudio();
+            try {
+                // Aktifkan Kamera Webcam
+                setupMediaPipe();
+                await camera.start();
+                startNewGame();
+            } catch (err) {
+                console.error("Camera access error:", err);
+                document.getElementById('modalCameraError').classList.remove('hidden');
+            }
+        });
+
+        document.getElementById('btnRetryCamera').addEventListener('click', () => {
+            document.getElementById('modalCameraError').classList.add('hidden');
+            location.reload();
+        });
+
+        document.getElementById('btnRestartGame').addEventListener('click', () => {
+            startNewGame();
+        });
+
+        document.getElementById('btnAudioToggle').addEventListener('click', () => {
+            audioEnabled = !audioEnabled;
+            const icon = document.getElementById('audioIcon');
+            if (audioEnabled) {
+                icon.className = 'fa-solid fa-volume-high';
+            } else {
+                icon.className = 'fa-solid fa-volume-xmark text-slate-500';
+            }
+        });
+
+        // Initialize Window
+        window.onload = () => {
+            resizeCanvas();
+            requestAnimationFrame(updateAndRender);
+        };
+    </script>
+</body>
+</html>
